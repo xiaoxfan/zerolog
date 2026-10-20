@@ -1,3 +1,4 @@
+//go:build binary_log
 // +build binary_log
 
 package zerolog
@@ -6,20 +7,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 
-	//	"io/ioutil"
 	stdlog "log"
 	"time"
 )
-
-func ExampleBinaryNew() {
-	dst := bytes.Buffer{}
-	log := New(&dst)
-
-	log.Info().Msg("hello world")
-	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
-	// Output: {"level":"info","message":"hello world"}
-}
 
 func ExampleLogger_With() {
 	dst := bytes.Buffer{}
@@ -214,12 +206,13 @@ func ExampleEvent_Dict() {
 	dst := bytes.Buffer{}
 	log := New(&dst)
 
-	log.Log().
-		Str("foo", "bar").
-		Dict("dict", Dict().
-			Str("bar", "baz").
-			Int("n", 1),
-		).
+	e := log.Log().
+		Str("foo", "bar")
+
+	e.Dict("dict", e.CreateDict().
+		Str("bar", "baz").
+		Int("n", 1),
+	).
 		Msg("hello world")
 
 	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
@@ -240,6 +233,7 @@ func (u User) MarshalZerologObject(e *Event) {
 
 type Users []User
 
+// User implements LogObjectMarshaler
 func (uu Users) MarshalZerologArray(a *Array) {
 	for _, u := range uu {
 		a.Object(u)
@@ -250,12 +244,13 @@ func ExampleEvent_Array() {
 	dst := bytes.Buffer{}
 	log := New(&dst)
 
-	log.Log().
-		Str("foo", "bar").
-		Array("array", Arr().
-			Str("baz").
-			Int(1),
-		).
+	e := log.Log().
+		Str("foo", "bar")
+
+	e.Array("array", e.CreateArray().
+		Str("baz").
+		Int(1),
+	).
 		Msg("hello world")
 
 	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
@@ -295,6 +290,25 @@ func ExampleEvent_Object() {
 
 	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
 	// Output: {"foo":"bar","user":{"name":"John","age":35,"created":"0001-01-01T00:00:00Z"},"message":"hello world"}
+}
+
+func ExampleContext_Objects() {
+	// In go, arrays are type invariant so even if you have a variable u of type []User array and User implements
+	// the LogObjectMarshaler interface, you cannot pass that to func that takes an []LogObjectMarshaler array in the
+	// Objects call. In 1.24+ it allows passing the variadic covariant slice (e.g. u...) but the unit test needs to
+	// work in earlier versions so we'll declare the array as []LogObjectMarshaler here.
+	u := []LogObjectMarshaler{User{"John", 35, time.Time{}}, User{"Bob", 55, time.Time{}}}
+
+	dst := bytes.Buffer{}
+	log := New(&dst).With().
+		Str("foo", "bar").
+		Objects("users", u).
+		Logger()
+
+	log.Log().Msg("hello world")
+
+	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
+	// Output: {"foo":"bar","users":[{"name":"John","age":35,"created":"0001-01-01T00:00:00Z"},{"name":"Bob","age":55,"created":"0001-01-01T00:00:00Z"}],"message":"hello world"}
 }
 
 func ExampleEvent_EmbedObject() {
@@ -402,14 +416,15 @@ func ExampleEvent_Fields_slice() {
 
 func ExampleContext_Dict() {
 	dst := bytes.Buffer{}
-	log := New(&dst).With().
-		Str("foo", "bar").
-		Dict("dict", Dict().
-			Str("bar", "baz").
-			Int("n", 1),
-		).Logger()
+	ctx := New(&dst).With().
+		Str("foo", "bar")
 
-	log.Log().Msg("hello world")
+	logger := ctx.Dict("dict", ctx.CreateDict().
+		Str("bar", "baz").
+		Int("n", 1),
+	).Logger()
+
+	logger.Log().Msg("hello world")
 
 	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
 	// Output: {"foo":"bar","dict":{"bar":"baz","n":1},"message":"hello world"}
@@ -417,14 +432,15 @@ func ExampleContext_Dict() {
 
 func ExampleContext_Array() {
 	dst := bytes.Buffer{}
-	log := New(&dst).With().
-		Str("foo", "bar").
-		Array("array", Arr().
-			Str("baz").
-			Int(1),
-		).Logger()
+	ctx := New(&dst).With().
+		Str("foo", "bar")
 
-	log.Log().Msg("hello world")
+	logger := ctx.Array("array", ctx.CreateArray().
+		Str("baz").
+		Int(1),
+	).Logger()
+
+	logger.Log().Msg("hello world")
 
 	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
 	// Output: {"foo":"bar","array":["baz",1],"message":"hello world"}
@@ -581,4 +597,51 @@ func ExampleContext_Fields_slice() {
 
 	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
 	// Output: {"foo":"bar","bar":"baz","n":1,"message":"hello world"}
+}
+
+func ExampleContext_IPAddr() {
+	ipV4 := net.IP{192, 168, 0, 1}
+	ipV6 := net.IP{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34}
+
+	dst := bytes.Buffer{}
+	log := New(&dst).With().
+		Str("foo", "bar").
+		IPAddr("v4", ipV4).
+		IPAddr("v6", ipV6).
+		Logger()
+
+	log.Log().Msg("hello world")
+
+	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
+	// Output: {"foo":"bar","v4":"192.168.0.1","v6":"2001:db8:85a3::8a2e:370:7334","message":"hello world"}
+}
+func ExampleContext_IPPrefix() {
+	pfxV4 := net.IPNet{IP: net.IP{192, 168, 0, 100}, Mask: net.CIDRMask(24, 32)}
+	pfxV6 := net.IPNet{IP: net.IP{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x00}, Mask: net.CIDRMask(64, 128)}
+
+	dst := bytes.Buffer{}
+	log := New(&dst).With().
+		Str("foo", "bar").
+		IPPrefix("v4", pfxV4).
+		IPPrefix("v6", pfxV6).
+		Logger()
+
+	log.Log().Msg("hello world")
+
+	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
+	// Output: {"foo":"bar","v4":"192.168.0.100/24","v6":"2001:db8:85a3::8a2e:370:7300/64","message":"hello world"}
+}
+func ExampleContext_MACAddr() {
+	mac := net.HardwareAddr{0x12, 0x34, 0x56, 0x78, 0x90, 0xab}
+
+	dst := bytes.Buffer{}
+	log := New(&dst).With().
+		Str("foo", "bar").
+		MACAddr("mac", mac).
+		Logger()
+
+	log.Log().Msg("hello world")
+
+	fmt.Println(decodeIfBinaryToString(dst.Bytes()))
+	// Output: {"foo":"bar","mac":"12:34:56:78:90:ab","message":"hello world"}
 }

@@ -31,13 +31,10 @@ func (s RandomSampler) Sample(lvl Level) bool {
 	if s <= 0 {
 		return false
 	}
-	if rand.Intn(int(s)) != 0 {
-		return false
-	}
-	return true
+	return rand.Int63n(int64(s)) == 0
 }
 
-// BasicSampler is a sampler that will send every Nth events, regardless of
+// BasicSampler is a sampler that will send every Nth event, regardless of
 // their level.
 type BasicSampler struct {
 	N       uint32
@@ -47,6 +44,9 @@ type BasicSampler struct {
 // Sample implements the Sampler interface.
 func (s *BasicSampler) Sample(lvl Level) bool {
 	n := s.N
+	if n == 0 {
+		return false
+	}
 	if n == 1 {
 		return true
 	}
@@ -55,7 +55,7 @@ func (s *BasicSampler) Sample(lvl Level) bool {
 }
 
 // BurstSampler lets Burst events pass per Period then pass the decision to
-// NextSampler. If Sampler is not set, all subsequent events are rejected.
+// NextSampler. If NextSampler is not set, all subsequent events are rejected.
 type BurstSampler struct {
 	// Burst is the maximum number of event per period allowed before calling
 	// NextSampler.
@@ -84,10 +84,10 @@ func (s *BurstSampler) Sample(lvl Level) bool {
 }
 
 func (s *BurstSampler) inc() uint32 {
-	now := time.Now().UnixNano()
+	now := TimestampFunc().UnixNano()
 	resetAt := atomic.LoadInt64(&s.resetAt)
 	var c uint32
-	if now > resetAt {
+	if now >= resetAt {
 		c = 1
 		atomic.StoreUint32(&s.counter, c)
 		newResetAt := now + s.Period.Nanoseconds()

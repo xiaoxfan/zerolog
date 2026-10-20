@@ -2,8 +2,7 @@ package zerolog
 
 import (
 	"errors"
-	"io/ioutil"
-	"net"
+	"io"
 	"testing"
 	"time"
 )
@@ -14,7 +13,7 @@ var (
 )
 
 func BenchmarkLogEmpty(b *testing.B) {
-	logger := New(ioutil.Discard)
+	logger := New(io.Discard)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -24,7 +23,7 @@ func BenchmarkLogEmpty(b *testing.B) {
 }
 
 func BenchmarkDisabled(b *testing.B) {
-	logger := New(ioutil.Discard).Level(Disabled)
+	logger := New(io.Discard).Level(Disabled)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -34,7 +33,7 @@ func BenchmarkDisabled(b *testing.B) {
 }
 
 func BenchmarkInfo(b *testing.B) {
-	logger := New(ioutil.Discard)
+	logger := New(io.Discard)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -44,7 +43,7 @@ func BenchmarkInfo(b *testing.B) {
 }
 
 func BenchmarkContextFields(b *testing.B) {
-	logger := New(ioutil.Discard).With().
+	logger := New(io.Discard).With().
 		Str("string", "four!").
 		Time("time", time.Time{}).
 		Int("int", 123).
@@ -59,7 +58,7 @@ func BenchmarkContextFields(b *testing.B) {
 }
 
 func BenchmarkContextAppend(b *testing.B) {
-	logger := New(ioutil.Discard).With().
+	logger := New(io.Discard).With().
 		Str("foo", "bar").
 		Logger()
 	b.ResetTimer()
@@ -71,7 +70,7 @@ func BenchmarkContextAppend(b *testing.B) {
 }
 
 func BenchmarkLogFields(b *testing.B) {
-	logger := New(ioutil.Discard)
+	logger := New(io.Discard)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -85,23 +84,11 @@ func BenchmarkLogFields(b *testing.B) {
 	})
 }
 
-type obj struct {
-	Pub  string
-	Tag  string `json:"tag"`
-	priv int
-}
-
-func (o obj) MarshalZerologObject(e *Event) {
-	e.Str("Pub", o.Pub).
-		Str("Tag", o.Tag).
-		Int("priv", o.priv)
-}
-
 func BenchmarkLogArrayObject(b *testing.B) {
-	obj1 := obj{"a", "b", 2}
-	obj2 := obj{"c", "d", 3}
-	obj3 := obj{"e", "f", 4}
-	logger := New(ioutil.Discard)
+	obj1 := fixtureObj{"a", "b", 2}
+	obj2 := fixtureObj{"c", "d", 3}
+	obj3 := fixtureObj{"e", "f", 4}
+	logger := New(io.Discard)
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -114,112 +101,125 @@ func BenchmarkLogArrayObject(b *testing.B) {
 }
 
 func BenchmarkLogFieldType(b *testing.B) {
-	bools := []bool{true, false, true, false, true, false, true, false, true, false}
-	ints := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	floats := []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	strings := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
-	durations := []time.Duration{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	times := []time.Time{
-		time.Unix(0, 0),
-		time.Unix(1, 0),
-		time.Unix(2, 0),
-		time.Unix(3, 0),
-		time.Unix(4, 0),
-		time.Unix(5, 0),
-		time.Unix(6, 0),
-		time.Unix(7, 0),
-		time.Unix(8, 0),
-		time.Unix(9, 0),
-	}
-	interfaces := []struct {
-		Pub  string
-		Tag  string `json:"tag"`
-		priv int
-	}{
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-	}
-	objects := []obj{
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-	}
-	errs := []error{errors.New("a"), errors.New("b"), errors.New("c"), errors.New("d"), errors.New("e")}
+	fixtures := makeFieldFixtures()
 	types := map[string]func(e *Event) *Event{
+		"Any": func(e *Event) *Event {
+			return e.Any("k", fixtures.Interfaces[0])
+		},
 		"Bool": func(e *Event) *Event {
-			return e.Bool("k", bools[0])
+			return e.Bool("k", fixtures.Bools[0])
 		},
 		"Bools": func(e *Event) *Event {
-			return e.Bools("k", bools)
+			return e.Bools("k", fixtures.Bools)
+		},
+		"Bytes": func(e *Event) *Event {
+			return e.Bytes("k", fixtures.Bytes)
+		},
+		"Hex": func(e *Event) *Event {
+			return e.Hex("k", fixtures.Bytes)
 		},
 		"Int": func(e *Event) *Event {
-			return e.Int("k", ints[0])
+			return e.Int("k", fixtures.Ints[0])
 		},
 		"Ints": func(e *Event) *Event {
-			return e.Ints("k", ints)
+			return e.Ints("k", fixtures.Ints)
 		},
-		"Float": func(e *Event) *Event {
-			return e.Float64("k", floats[0])
+		"Float32": func(e *Event) *Event {
+			return e.Float32("k", fixtures.Floats32[0])
 		},
-		"Floats": func(e *Event) *Event {
-			return e.Floats64("k", floats)
+		"Floats32": func(e *Event) *Event {
+			return e.Floats32("k", fixtures.Floats32)
+		},
+		"Float64": func(e *Event) *Event {
+			return e.Float64("k", fixtures.Floats64[0])
+		},
+		"Floats64": func(e *Event) *Event {
+			return e.Floats64("k", fixtures.Floats64)
 		},
 		"Str": func(e *Event) *Event {
-			return e.Str("k", strings[0])
+			return e.Str("k", fixtures.Strings[0])
 		},
 		"Strs": func(e *Event) *Event {
-			return e.Strs("k", strings)
+			return e.Strs("k", fixtures.Strings)
+		},
+		"StrsV": func(e *Event) *Event {
+			return e.StrsV("k", fixtures.Strings...)
+		},
+		"Stringer": func(e *Event) *Event {
+			return e.Stringer("k", fixtures.Stringers[0])
+		},
+		"Stringers": func(e *Event) *Event {
+			return e.Stringers("k", fixtures.Stringers)
+		},
+		"StringersV": func(e *Event) *Event {
+			return e.StringersV("k", fixtures.Stringers...)
 		},
 		"Err": func(e *Event) *Event {
-			return e.Err(errs[0])
+			return e.Err(fixtures.Errs[0])
 		},
 		"Errs": func(e *Event) *Event {
-			return e.Errs("k", errs)
+			return e.Errs("k", fixtures.Errs)
+		},
+		"Ctx": func(e *Event) *Event {
+			return e.Ctx(fixtures.Ctx)
 		},
 		"Time": func(e *Event) *Event {
-			return e.Time("k", times[0])
+			return e.Time("k", fixtures.Times[0])
 		},
 		"Times": func(e *Event) *Event {
-			return e.Times("k", times)
+			return e.Times("k", fixtures.Times)
 		},
 		"Dur": func(e *Event) *Event {
-			return e.Dur("k", durations[0])
+			return e.Dur("k", fixtures.Durations[0])
 		},
 		"Durs": func(e *Event) *Event {
-			return e.Durs("k", durations)
+			return e.Durs("k", fixtures.Durations)
 		},
 		"Interface": func(e *Event) *Event {
-			return e.Interface("k", interfaces[0])
+			return e.Interface("k", fixtures.Interfaces[0])
 		},
 		"Interfaces": func(e *Event) *Event {
-			return e.Interface("k", interfaces)
+			return e.Interface("k", fixtures.Interfaces)
 		},
 		"Interface(Object)": func(e *Event) *Event {
-			return e.Interface("k", objects[0])
+			return e.Interface("k", fixtures.Objects[0])
 		},
 		"Interface(Objects)": func(e *Event) *Event {
-			return e.Interface("k", objects)
+			return e.Interface("k", fixtures.Objects)
 		},
 		"Object": func(e *Event) *Event {
-			return e.Object("k", objects[0])
+			return e.Object("k", fixtures.Objects[0])
+		},
+		"Objects": func(e *Event) *Event {
+			return e.Objects("k", fixtures.Objects)
+		},
+		"ObjectsV": func(e *Event) *Event {
+			return e.ObjectsV("k", fixtures.Objects...)
+		},
+		"Timestamp": func(e *Event) *Event {
+			return e.Timestamp()
+		},
+		"IPAddr": func(e *Event) *Event {
+			return e.IPAddr("k", fixtures.IPAddrs[0])
+		},
+		"IPAddrs": func(e *Event) *Event {
+			return e.IPAddrs("k", fixtures.IPAddrs)
+		},
+		"IPPrefix": func(e *Event) *Event {
+			return e.IPPrefix("k", fixtures.IPPfxs[0])
+		},
+		"IPPrefixes": func(e *Event) *Event {
+			return e.IPPrefixes("k", fixtures.IPPfxs)
+		},
+		"MACAddr": func(e *Event) *Event {
+			return e.MACAddr("k", fixtures.MACAddr)
+		},
+		"Type": func(e *Event) *Event {
+			return e.Type("k", fixtures.Type)
 		},
 	}
-	logger := New(ioutil.Discard)
+
+	logger := New(io.Discard)
 	b.ResetTimer()
 	for name := range types {
 		f := types[name]
@@ -237,119 +237,126 @@ func BenchmarkContextFieldType(b *testing.B) {
 	oldFormat := TimeFieldFormat
 	TimeFieldFormat = TimeFormatUnix
 	defer func() { TimeFieldFormat = oldFormat }()
-	bools := []bool{true, false, true, false, true, false, true, false, true, false}
-	ints := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	floats := []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	strings := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
-	stringer := net.IP{127, 0, 0, 1}
-	durations := []time.Duration{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	times := []time.Time{
-		time.Unix(0, 0),
-		time.Unix(1, 0),
-		time.Unix(2, 0),
-		time.Unix(3, 0),
-		time.Unix(4, 0),
-		time.Unix(5, 0),
-		time.Unix(6, 0),
-		time.Unix(7, 0),
-		time.Unix(8, 0),
-		time.Unix(9, 0),
-	}
-	interfaces := []struct {
-		Pub  string
-		Tag  string `json:"tag"`
-		priv int
-	}{
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-	}
-	objects := []obj{
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-		{"a", "a", 0},
-	}
-	errs := []error{errors.New("a"), errors.New("b"), errors.New("c"), errors.New("d"), errors.New("e")}
+
+	fixtures := makeFieldFixtures()
 	types := map[string]func(c Context) Context{
+		"Any": func(c Context) Context {
+			return c.Any("k", fixtures.Interfaces[0])
+		},
 		"Bool": func(c Context) Context {
-			return c.Bool("k", bools[0])
+			return c.Bool("k", fixtures.Bools[0])
 		},
 		"Bools": func(c Context) Context {
-			return c.Bools("k", bools)
+			return c.Bools("k", fixtures.Bools)
+		},
+		"Bytes": func(c Context) Context {
+			return c.Bytes("k", fixtures.Bytes)
+		},
+		"Hex": func(c Context) Context {
+			return c.Hex("k", fixtures.Bytes)
 		},
 		"Int": func(c Context) Context {
-			return c.Int("k", ints[0])
+			return c.Int("k", fixtures.Ints[0])
 		},
 		"Ints": func(c Context) Context {
-			return c.Ints("k", ints)
+			return c.Ints("k", fixtures.Ints)
 		},
-		"Float": func(c Context) Context {
-			return c.Float64("k", floats[0])
+		"Float32": func(c Context) Context {
+			return c.Float32("k", fixtures.Floats32[0])
 		},
-		"Floats": func(c Context) Context {
-			return c.Floats64("k", floats)
+		"Floats32": func(c Context) Context {
+			return c.Floats32("k", fixtures.Floats32)
+		},
+		"Float64": func(c Context) Context {
+			return c.Float64("k", fixtures.Floats64[0])
+		},
+		"Floats64": func(c Context) Context {
+			return c.Floats64("k", fixtures.Floats64)
 		},
 		"Str": func(c Context) Context {
-			return c.Str("k", strings[0])
+			return c.Str("k", fixtures.Strings[0])
 		},
 		"Strs": func(c Context) Context {
-			return c.Strs("k", strings)
+			return c.Strs("k", fixtures.Strings)
+		},
+		"StrsV": func(c Context) Context {
+			return c.StrsV("k", fixtures.Strings...)
 		},
 		"Stringer": func(c Context) Context {
-			return c.Stringer("k", stringer)
+			return c.Stringer("k", fixtures.Stringers[0])
+		},
+		"Stringers": func(c Context) Context {
+			return c.Stringers("k", fixtures.Stringers)
+		},
+		"StringersV": func(c Context) Context {
+			return c.StringersV("k", fixtures.Stringers...)
 		},
 		"Err": func(c Context) Context {
-			return c.Err(errs[0])
+			return c.Err(fixtures.Errs[0])
 		},
 		"Errs": func(c Context) Context {
-			return c.Errs("k", errs)
+			return c.Errs("k", fixtures.Errs)
+		},
+		"Ctx": func(c Context) Context {
+			return c.Ctx(fixtures.Ctx)
 		},
 		"Time": func(c Context) Context {
-			return c.Time("k", times[0])
+			return c.Time("k", fixtures.Times[0])
 		},
 		"Times": func(c Context) Context {
-			return c.Times("k", times)
+			return c.Times("k", fixtures.Times)
 		},
 		"Dur": func(c Context) Context {
-			return c.Dur("k", durations[0])
+			return c.Dur("k", fixtures.Durations[0])
 		},
 		"Durs": func(c Context) Context {
-			return c.Durs("k", durations)
+			return c.Durs("k", fixtures.Durations)
 		},
 		"Interface": func(c Context) Context {
-			return c.Interface("k", interfaces[0])
+			return c.Interface("k", fixtures.Interfaces[0])
 		},
 		"Interfaces": func(c Context) Context {
-			return c.Interface("k", interfaces)
+			return c.Interface("k", fixtures.Interfaces)
 		},
 		"Interface(Object)": func(c Context) Context {
-			return c.Interface("k", objects[0])
+			return c.Interface("k", fixtures.Objects[0])
 		},
 		"Interface(Objects)": func(c Context) Context {
-			return c.Interface("k", objects)
+			return c.Interface("k", fixtures.Objects)
 		},
 		"Object": func(c Context) Context {
-			return c.Object("k", objects[0])
+			return c.Object("k", fixtures.Objects[0])
+		},
+		"Objects": func(c Context) Context {
+			return c.Objects("k", fixtures.Objects)
+		},
+		"ObjectsV": func(c Context) Context {
+			return c.ObjectsV("k", fixtures.Objects...)
 		},
 		"Timestamp": func(c Context) Context {
 			return c.Timestamp()
 		},
+		"IPAddr": func(c Context) Context {
+			return c.IPAddr("k", fixtures.IPAddrs[0])
+		},
+		"IPAddrs": func(c Context) Context {
+			return c.IPAddrs("k", fixtures.IPAddrs)
+		},
+		"IPPrefix": func(c Context) Context {
+			return c.IPPrefix("k", fixtures.IPPfxs[0])
+		},
+		"IPPrefixes": func(c Context) Context {
+			return c.IPPrefixes("k", fixtures.IPPfxs)
+		},
+		"MACAddr": func(c Context) Context {
+			return c.MACAddr("k", fixtures.MACAddr)
+		},
+		"Type": func(c Context) Context {
+			return c.Type("k", fixtures.Type)
+		},
 	}
-	logger := New(ioutil.Discard)
+
+	logger := New(io.Discard)
 	b.ResetTimer()
 	for name := range types {
 		f := types[name]

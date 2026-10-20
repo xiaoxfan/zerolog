@@ -56,8 +56,8 @@ func (sw syslogWriter) Write(p []byte) (n int, err error) {
 // WriteLevel implements LevelWriter interface.
 func (sw syslogWriter) WriteLevel(level Level, p []byte) (n int, err error) {
 	switch level {
-	case TraceLevel:
-	case DebugLevel:
+	case TraceLevel, DebugLevel:
+		// syslog has no TRACE severity; map Trace to Debug
 		err = sw.w.Debug(sw.prefix + string(p))
 	case InfoLevel:
 		err = sw.w.Info(sw.prefix + string(p))
@@ -77,4 +77,13 @@ func (sw syslogWriter) WriteLevel(level Level, p []byte) (n int, err error) {
 	// Any CEE prefix is not part of the message, so we don't include its length
 	n = len(p)
 	return
+}
+
+// Call the underlying writer's Close method if it is an io.Closer. Otherwise
+// does nothing.
+func (sw syslogWriter) Close() error {
+	if c, ok := sw.w.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
 }

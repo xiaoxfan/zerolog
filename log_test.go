@@ -2,8 +2,11 @@ package zerolog
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"reflect"
 	"runtime"
@@ -119,17 +122,27 @@ func TestWith(t *testing.T) {
 		Uint64("uint64", 10).
 		Float32("float32", 11.101).
 		Float64("float64", 12.30303).
-		Time("time", time.Time{})
+		Time("time", time.Time{}).
+		Dur("dur", 3).
+		Ctx(context.Background()).
+		Any("any", "test").
+		Interface("interface", struct {
+			Pub string
+			Tag string `json:"tag"`
+		}{"a", "b"}).
+		Type("type", math.Phi)
 	_, file, line, _ := runtime.Caller(0)
 	caller := fmt.Sprintf("%s:%d", file, line+3)
 	log := ctx.Caller().Logger()
 	log.Log().Msg("")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"string":"foo","stringer":"127.0.0.1","stringer_nil":null,"bytes":"bar","hex":"12ef","json":{"some":"json"},"error":"some error","bool":true,"int":1,"int8":2,"int16":3,"int32":4,"int64":5,"uint":6,"uint8":7,"uint16":8,"uint32":9,"uint64":10,"float32":11.101,"float64":12.30303,"time":"0001-01-01T00:00:00Z","caller":"`+caller+`"}`+"\n"; got != want {
+	if got, want := decodeIfBinaryToString(out.Bytes()),
+		`{"string":"foo","stringer":"127.0.0.1","stringer_nil":null,"bytes":"bar","hex":"12ef","json":{"some":"json"},"error":"some error","bool":true,"int":1,"int8":2,"int16":3,"int32":4,"int64":5,"uint":6,"uint8":7,"uint16":8,"uint32":9,"uint64":10,"float32":11.101,"float64":12.30303,"time":"0001-01-01T00:00:00Z","dur":0.000003,"any":"test","interface":{"Pub":"a","tag":"b"},"type":"float64","caller":"`+caller+`"}`+"\n"; got != want {
 		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
 	}
 
 	// Validate CallerWithSkipFrameCount.
 	out.Reset()
+	ctx = New(out).With()
 	_, file, line, _ = runtime.Caller(0)
 	caller = fmt.Sprintf("%s:%d", file, line+5)
 	log = ctx.CallerWithSkipFrameCount(3).Logger()
@@ -138,7 +151,82 @@ func TestWith(t *testing.T) {
 	}()
 	// The above line is a little contrived, but the line above should be the line due
 	// to the extra frame skip.
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"string":"foo","stringer":"127.0.0.1","stringer_nil":null,"bytes":"bar","hex":"12ef","json":{"some":"json"},"error":"some error","bool":true,"int":1,"int8":2,"int16":3,"int32":4,"int64":5,"uint":6,"uint8":7,"uint16":8,"uint32":9,"uint64":10,"float32":11.101,"float64":12.30303,"time":"0001-01-01T00:00:00Z","caller":"`+caller+`"}`+"\n"; got != want {
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"caller":"`+caller+`"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestStackedWiths(t *testing.T) {
+	out := &bytes.Buffer{}
+	ctx := New(out).With().
+		Bool("bool", true)
+	ctx = ctx.Logger().With().
+		Int("int", 1)
+	log := ctx.Logger()
+	log.Log().Msg("")
+	if got, want := decodeIfBinaryToString(out.Bytes()),
+		`{"bool":true,"int":1}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestWithPlurals(t *testing.T) {
+	out := &bytes.Buffer{}
+	ctx := New(out).
+		With().
+		Objects("objs", []LogObjectMarshaler{fixtureObj{"a", "z", 1}}).
+		Objects("objs_nil", nil).
+		ObjectsV("objs_v", fixtureObj{"A", "Z", 2}).
+		ObjectsV("objs_v_empty").
+		Strs("strs", []string{"foo", "bar"}).
+		Strs("strs_nil", nil).
+		StrsV("strs_v", "baz", "fizz").
+		StrsV("strs_v_empty").
+		Stringers("stringers", []fmt.Stringer{net.IP{127, 0, 0, 1}, time.Time{}.AddDate(0, 1, 2), 1 * time.Second, nil}).
+		Stringers("stringers_nil", nil).
+		StringersV("stringers_v", net.IP{127, 0, 0, 1}, time.Time{}.AddDate(0, 1, 2), 1*time.Second, nil).
+		StringersV("stringers_v_empty").
+		Errs("errs", []error{errors.New("some error"), errors.New("some other error"), nil, loggableError{fmt.Errorf("oops")}, nonLoggableError{fmt.Errorf("whoops"), 401}}).
+		Errs("errs_nil", nil).
+		Bools("bool", []bool{true, false}).
+		Ints("int", []int{1, 2}).
+		Ints8("int8", []int8{2, 3}).
+		Ints16("int16", []int16{3, 4}).
+		Ints32("int32", []int32{4, 5}).
+		Ints64("int64", []int64{5, 6}).
+		Uints("uint", []uint{6, 7}).
+		Uints8("uint8", []uint8{7, 8}).
+		Uints16("uint16", []uint16{8, 9}).
+		Uints32("uint32", []uint32{9, 10}).
+		Uints64("uint64", []uint64{10, 11}).
+		Floats32("float32", []float32{1.1, 2.2}).
+		Floats64("float64", []float64{2.2, 3.3}).
+		Times("time", []time.Time{time.Time{}.AddDate(0, 1, 2), time.Time{}.AddDate(4, 5, 6)}).
+		Durs("dur", []time.Duration{1 * time.Second, 2 * time.Second})
+	log := ctx.Logger()
+	log.Log().Msg("")
+	if got, want := decodeIfBinaryToString(out.Bytes()),
+		`{"objs":[{"Pub":"a","Tag":"z","priv":1}],"objs_nil":[],"objs_v":[{"Pub":"A","Tag":"Z","priv":2}],"objs_v_empty":[],"strs":["foo","bar"],"strs_nil":[],"strs_v":["baz","fizz"],"strs_v_empty":[],"stringers":["127.0.0.1","0001-02-03 00:00:00 +0000 UTC","1s",null],"stringers_nil":[],"stringers_v":["127.0.0.1","0001-02-03 00:00:00 +0000 UTC","1s",null],"stringers_v_empty":[],"errs":["some error","some other error",null,{"l":"OOPS"},"whoops"],"errs_nil":[],"bool":[true,false],"int":[1,2],"int8":[2,3],"int16":[3,4],"int32":[4,5],"int64":[5,6],"uint":[6,7],"uint8":[7,8],"uint16":[8,9],"uint32":[9,10],"uint64":[10,11],"float32":[1.1,2.2],"float64":[2.2,3.3],"time":["0001-02-03T00:00:00Z","0005-06-07T00:00:00Z"],"dur":[1000,2000]}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestWithReset(t *testing.T) {
+	out := &bytes.Buffer{}
+	ctx := New(out).With().
+		Str("string", "foo").
+		Stringer("stringer", net.IP{127, 0, 0, 1}).
+		Stringer("stringer_nil", nil).
+		Reset().
+		Bytes("bytes", []byte("bar")).
+		Hex("hex", []byte{0x12, 0xef}).
+		Uint64("uint64", 10).
+		Float64("float64", 12.30303).
+		Stack().
+		Ctx(context.Background())
+	log := ctx.Logger()
+	log.Log().Msg("")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"bytes":"bar","hex":"12ef","uint64":10,"float64":12.30303}`+"\n"; got != want {
 		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
 	}
 }
@@ -165,11 +253,92 @@ func TestFieldsMap(t *testing.T) {
 		"float32": float32(11),
 		"float64": float64(12),
 		"ipv6":    net.IP{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34},
+		"ipnet":   net.IPNet{IP: net.IP{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34}, Mask: net.CIDRMask(64, 128)},
+		"macaddr": net.HardwareAddr{0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E},
 		"dur":     1 * time.Second,
 		"time":    time.Time{},
-		"obj":     obj{"a", "b", 1},
+		"obj":     fixtureObj{"a", "b", 1},
+		"objs":    []LogObjectMarshaler{fixtureObj{"a", "b", 1}, fixtureObj{"c", "d", 2}},
+		"any":     struct{ A string }{"test"},
+		"raw":     json.RawMessage(`{"some":"json"}`),
 	}).Msg("")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"bool":true,"bytes":"bar","dur":1000,"error":"some error","float32":11,"float64":12,"int":1,"int16":3,"int32":4,"int64":5,"int8":2,"ipv6":"2001:db8:85a3::8a2e:370:7334","nil":null,"obj":{"Pub":"a","Tag":"b","priv":1},"string":"foo","time":"0001-01-01T00:00:00Z","uint":6,"uint16":8,"uint32":9,"uint64":10,"uint8":7}`+"\n"; got != want {
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"any":{"A":"test"},"bool":true,"bytes":"bar","dur":1000,"error":"some error","float32":11,"float64":12,"int":1,"int16":3,"int32":4,"int64":5,"int8":2,"ipnet":"2001:db8:85a3::8a2e:370:7334/64","ipv6":"2001:db8:85a3::8a2e:370:7334","macaddr":"00:1a:2b:3c:4d:5e","nil":null,"obj":{"Pub":"a","Tag":"b","priv":1},"objs":[{"Pub":"a","Tag":"b","priv":1},{"Pub":"c","Tag":"d","priv":2}],"raw":{"some":"json"},"string":"foo","time":"0001-01-01T00:00:00Z","uint":6,"uint16":8,"uint32":9,"uint64":10,"uint8":7}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+func TestFieldsMap_Arrays(t *testing.T) {
+	out := &bytes.Buffer{}
+	log := New(out)
+	log.Log().Fields(map[string]interface{}{
+		"strings":  []string{"foo"},
+		"bools":    []bool{true},
+		"errors":   []error{errors.New("some error")},
+		"ints":     []int{1},
+		"ints8":    []int8{1},
+		"ints16":   []int16{3},
+		"ints32":   []int32{4},
+		"ints64":   []int64{5},
+		"uints":    []uint{6},
+		"uint8s":   []uint8{44},
+		"uints16":  []uint16{8},
+		"uints32":  []uint32{9},
+		"uints64":  []uint64{10},
+		"floats32": []float32{11},
+		"floats64": []float64{12},
+		"ipv6s":    []net.IP{{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34}},
+		"ipnets":   []net.IPNet{{IP: net.IP{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34}, Mask: net.CIDRMask(64, 128)}},
+		"macaddrs": []net.HardwareAddr{{0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E}},
+		"durs":     []time.Duration{1 * time.Second},
+		"times":    []time.Time{{}},
+		"objs":     []fixtureObj{{"a", "b", 1}},
+	}).Msg("")
+	// special case: []uint8 are logged as base64 string so we use "," for 44
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"bools":[true],"durs":[1000],"errors":["some error"],"floats32":[11],"floats64":[12],"ints":[1],"ints16":[3],"ints32":[4],"ints64":[5],"ints8":[1],"ipnets":["2001:db8:85a3::8a2e:370:7334/64"],"ipv6s":["2001:db8:85a3::8a2e:370:7334"],"macaddrs":["ABorPE1e"],"objs":[{"Pub":"a","tag":"b"}],"strings":["foo"],"times":["0001-01-01T00:00:00Z"],"uint8s":",","uints":[6],"uints16":[8],"uints32":[9],"uints64":[10]}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestWithErr(t *testing.T) {
+	var err error = nil
+	out := &bytes.Buffer{}
+	ctx := New(out).With().
+		Fields(map[string]interface{}{
+			"nil":          nil,
+			"nilerror":     err,
+			"error":        errors.New("some error"),
+			"loggable":     loggableError{errors.New("loggable")},
+			"non-loggable": nonLoggableError{fmt.Errorf("oops"), 401},
+		})
+	log := ctx.Logger()
+	log.Log().Msg("")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"error":"some error","loggable":{"l":"LOGGABLE"},"nil":null,"nilerror":null,"non-loggable":"oops"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestFieldsErr(t *testing.T) {
+	var err error = nil
+	out := &bytes.Buffer{}
+	log := New(out)
+	log.Log().Fields(map[string]interface{}{
+		"nil":          nil,
+		"nilerror":     err,
+		"error":        errors.New("some error"),
+		"loggable":     loggableError{errors.New("loggable")},
+		"non-loggable": nonLoggableError{fmt.Errorf("oops"), 401},
+	}).Msg("")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"error":"some error","loggable":{"l":"LOGGABLE"},"nil":null,"nilerror":null,"non-loggable":"oops"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+func TestFieldsErrs(t *testing.T) {
+	var err error = nil
+	out := &bytes.Buffer{}
+	log := New(out)
+	log.Log().Fields(map[string]interface{}{
+		"errors": []error{errors.New("some error"), nil, err, loggableError{errors.New("loggable")}, nonLoggableError{fmt.Errorf("oops"), 404}},
+	}).Msg("")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"errors":["some error",null,null,{"l":"LOGGABLE"},"oops"]}`+"\n"; got != want {
 		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
 	}
 }
@@ -270,7 +439,7 @@ func TestFieldsSlice(t *testing.T) {
 		"ipv6", net.IP{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34},
 		"dur", 1 * time.Second,
 		"time", time.Time{},
-		"obj", obj{"a", "b", 1},
+		"obj", fixtureObj{"a", "b", 1},
 	}).Msg("")
 	if got, want := decodeIfBinaryToString(out.Bytes()), `{"nil":null,"string":"foo","bytes":"bar","error":"some error","bool":true,"int":1,"int8":2,"int16":3,"int32":4,"int64":5,"uint":6,"uint8":7,"uint16":8,"uint32":9,"uint64":10,"float32":11,"float64":12,"ipv6":"2001:db8:85a3::8a2e:370:7334","dur":1000,"time":"0001-01-01T00:00:00Z","obj":{"Pub":"a","Tag":"b","priv":1}}`+"\n"; got != want {
 		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
@@ -297,7 +466,7 @@ func TestFieldsNotMapSlice(t *testing.T) {
 	out := &bytes.Buffer{}
 	log := New(out)
 	log.Log().
-		Fields(obj{"a", "b", 1}).
+		Fields(fixtureObj{"a", "b", 1}).
 		Fields("string").
 		Fields(1).
 		Msg("")
@@ -314,12 +483,13 @@ func TestFields(t *testing.T) {
 	caller := fmt.Sprintf("%s:%d", file, line+3)
 	log.Log().
 		Caller().
+		Object("obj", fixtureObj{"a", "z", 1}).
 		Str("string", "foo").
 		Stringer("stringer", net.IP{127, 0, 0, 1}).
-		Stringer("stringer_nil", nil).
 		Bytes("bytes", []byte("bar")).
 		Hex("hex", []byte{0x12, 0xef}).
 		RawJSON("json", []byte(`{"some":"json"}`)).
+		RawCBOR("cbor", []byte{0x83, 0x01, 0x82, 0x02, 0x03, 0x82, 0x04, 0x05}).
 		Func(func(e *Event) { e.Str("func", "func_output") }).
 		AnErr("some_err", nil).
 		Err(errors.New("some error")).
@@ -334,17 +504,57 @@ func TestFields(t *testing.T) {
 		Uint16("uint16", 8).
 		Uint32("uint32", 9).
 		Uint64("uint64", 10).
-		IPAddr("IPv4", net.IP{192, 168, 0, 100}).
-		IPAddr("IPv6", net.IP{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34}).
-		MACAddr("Mac", net.HardwareAddr{0x00, 0x14, 0x22, 0x01, 0x23, 0x45}).
-		IPPrefix("Prefix", net.IPNet{IP: net.IP{192, 168, 0, 100}, Mask: net.CIDRMask(24, 32)}).
+		IPAddr("ipv4", net.IP{192, 168, 0, 100}).
+		IPAddr("ipv6", net.IP{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34}).
+		MACAddr("mac", net.HardwareAddr{0x00, 0x14, 0x22, 0x01, 0x23, 0x45}).
+		IPPrefix("pfxv4", net.IPNet{IP: net.IP{192, 168, 0, 100}, Mask: net.CIDRMask(24, 32)}).
+		IPPrefix("pfxv6", net.IPNet{IP: net.IP{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34}, Mask: net.CIDRMask(64, 128)}).
 		Float32("float32", 11.1234).
 		Float64("float64", 12.321321321).
 		Dur("dur", 1*time.Second).
 		Time("time", time.Time{}).
 		TimeDiff("diff", now, now.Add(-10*time.Second)).
+		Ctx(context.Background()).
+		Type("type", "hello").
+		Any("any", struct{ A string }{"test"}).
+		Any("logobject", fixtureObj{"a", "z", 1}).
+		Stack().
 		Msg("")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"caller":"`+caller+`","string":"foo","stringer":"127.0.0.1","stringer_nil":null,"bytes":"bar","hex":"12ef","json":{"some":"json"},"func":"func_output","error":"some error","bool":true,"int":1,"int8":2,"int16":3,"int32":4,"int64":5,"uint":6,"uint8":7,"uint16":8,"uint32":9,"uint64":10,"IPv4":"192.168.0.100","IPv6":"2001:db8:85a3::8a2e:370:7334","Mac":"00:14:22:01:23:45","Prefix":"192.168.0.100/24","float32":11.1234,"float64":12.321321321,"dur":1000,"time":"0001-01-01T00:00:00Z","diff":10000}`+"\n"; got != want {
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"caller":"`+caller+`","obj":{"Pub":"a","Tag":"z","priv":1},"string":"foo","stringer":"127.0.0.1","bytes":"bar","hex":"12ef","json":{"some":"json"},"cbor":"data:application/cbor;base64,gwGCAgOCBAU=","func":"func_output","error":"some error","bool":true,"int":1,"int8":2,"int16":3,"int32":4,"int64":5,"uint":6,"uint8":7,"uint16":8,"uint32":9,"uint64":10,"ipv4":"192.168.0.100","ipv6":"2001:db8:85a3::8a2e:370:7334","mac":"00:14:22:01:23:45","pfxv4":"192.168.0.100/24","pfxv6":"2001:db8:85a3::8a2e:370:7334/64","float32":11.1234,"float64":12.321321321,"dur":1000,"time":"0001-01-01T00:00:00Z","diff":10000,"type":"string","any":{"A":"test"},"logobject":{"Pub":"a","Tag":"z","priv":1}}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestFieldsArrayNil(t *testing.T) {
+	out := &bytes.Buffer{}
+	log := New(out)
+	log.Log().
+		Objects("objs", nil).
+		ObjectsV("objs_v").
+		Strs("strs", nil).
+		StrsV("strs_v").
+		Stringers("stringers", nil).
+		StringersV("stringers_v").
+		Errs("err", nil).
+		Bools("bool", nil).
+		Ints("int", nil).
+		Ints8("int8", nil).
+		Ints16("int16", nil).
+		Ints32("int32", nil).
+		Ints64("int64", nil).
+		Uints("uint", nil).
+		Uints8("uint8", nil).
+		Uints16("uint16", nil).
+		Uints32("uint32", nil).
+		Uints64("uint64", nil).
+		Floats32("float32", nil).
+		Floats64("float64", nil).
+		Durs("dur", nil).
+		Times("time", nil).
+		IPAddrs("ip", nil).
+		IPPrefixes("pfx", nil).
+		Msg("")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"objs":[],"objs_v":[],"strs":[],"strs_v":[],"stringers":[],"stringers_v":[],"err":[],"bool":[],"int":[],"int8":[],"int16":[],"int32":[],"int64":[],"uint":[],"uint8":[],"uint16":[],"uint32":[],"uint64":[],"float32":[],"float64":[],"dur":[],"time":[],"ip":[],"pfx":[]}`+"\n"; got != want {
 		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
 	}
 }
@@ -353,8 +563,12 @@ func TestFieldsArrayEmpty(t *testing.T) {
 	out := &bytes.Buffer{}
 	log := New(out)
 	log.Log().
-		Strs("string", []string{}).
-		Stringers("stringer", []fmt.Stringer{}).
+		Objects("objs", []LogObjectMarshaler{}).
+		ObjectsV("objs_v").
+		Strs("strs", []string{}).
+		StrsV("strs_v").
+		Stringers("stringers", []fmt.Stringer{}).
+		StringersV("stringers_v").
 		Errs("err", []error{}).
 		Bools("bool", []bool{}).
 		Ints("int", []int{}).
@@ -371,8 +585,10 @@ func TestFieldsArrayEmpty(t *testing.T) {
 		Floats64("float64", []float64{}).
 		Durs("dur", []time.Duration{}).
 		Times("time", []time.Time{}).
+		IPAddrs("ip", []net.IP{}).
+		IPPrefixes("pfx", []net.IPNet{}).
 		Msg("")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"string":[],"stringer":[],"err":[],"bool":[],"int":[],"int8":[],"int16":[],"int32":[],"int64":[],"uint":[],"uint8":[],"uint16":[],"uint32":[],"uint64":[],"float32":[],"float64":[],"dur":[],"time":[]}`+"\n"; got != want {
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"objs":[],"objs_v":[],"strs":[],"strs_v":[],"stringers":[],"stringers_v":[],"err":[],"bool":[],"int":[],"int8":[],"int16":[],"int32":[],"int64":[],"uint":[],"uint8":[],"uint16":[],"uint32":[],"uint64":[],"float32":[],"float64":[],"dur":[],"time":[],"ip":[],"pfx":[]}`+"\n"; got != want {
 		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
 	}
 }
@@ -381,8 +597,12 @@ func TestFieldsArraySingleElement(t *testing.T) {
 	out := &bytes.Buffer{}
 	log := New(out)
 	log.Log().
-		Strs("string", []string{"foo"}).
+		Objects("obj", []LogObjectMarshaler{fixtureObj{"a", "z", 1}}).
+		ObjectsV("obj_v", fixtureObj{"A", "Z", 2}).
+		Strs("str", []string{"foo"}).
+		StrsV("str_v", "baz").
 		Stringers("stringer", []fmt.Stringer{net.IP{127, 0, 0, 1}}).
+		StringersV("stringer_v", net.IPv6loopback).
 		Errs("err", []error{errors.New("some error")}).
 		Bools("bool", []bool{true}).
 		Ints("int", []int{1}).
@@ -399,8 +619,10 @@ func TestFieldsArraySingleElement(t *testing.T) {
 		Floats64("float64", []float64{12}).
 		Durs("dur", []time.Duration{1 * time.Second}).
 		Times("time", []time.Time{{}}).
+		IPAddrs("ip", []net.IP{{192, 168, 0, 100}}).
+		IPPrefixes("pfx", []net.IPNet{{IP: net.IP{192, 168, 0, 100}, Mask: net.CIDRMask(24, 32)}}).
 		Msg("")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"string":["foo"],"stringer":["127.0.0.1"],"err":["some error"],"bool":[true],"int":[1],"int8":[2],"int16":[3],"int32":[4],"int64":[5],"uint":[6],"uint8":[7],"uint16":[8],"uint32":[9],"uint64":[10],"float32":[11],"float64":[12],"dur":[1000],"time":["0001-01-01T00:00:00Z"]}`+"\n"; got != want {
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"obj":[{"Pub":"a","Tag":"z","priv":1}],"obj_v":[{"Pub":"A","Tag":"Z","priv":2}],"str":["foo"],"str_v":["baz"],"stringer":["127.0.0.1"],"stringer_v":["::1"],"err":["some error"],"bool":[true],"int":[1],"int8":[2],"int16":[3],"int32":[4],"int64":[5],"uint":[6],"uint8":[7],"uint16":[8],"uint32":[9],"uint64":[10],"float32":[11],"float64":[12],"dur":[1000],"time":["0001-01-01T00:00:00Z"],"ip":["192.168.0.100"],"pfx":["192.168.0.100/24"]}`+"\n"; got != want {
 		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
 	}
 }
@@ -409,8 +631,12 @@ func TestFieldsArrayMultipleElement(t *testing.T) {
 	out := &bytes.Buffer{}
 	log := New(out)
 	log.Log().
-		Strs("string", []string{"foo", "bar"}).
-		Stringers("stringer", []fmt.Stringer{nil, net.IP{127, 0, 0, 1}}).
+		Objects("objs", []LogObjectMarshaler{fixtureObj{"a", "z", 1}, fixtureObj{"b", "y", 2}}).
+		ObjectsV("objs_v", fixtureObj{"A", "Z", 3}, fixtureObj{"B", "Y", 4}).
+		Strs("strs", []string{"foo", "bar"}).
+		StrsV("strs_v", "baz", "fizz").
+		Stringers("stringers", []fmt.Stringer{nil, net.IP{127, 0, 0, 1}}).
+		StringersV("stringers_v", net.IPv4bcast, net.IPv6loopback).
 		Errs("err", []error{errors.New("some error"), nil}).
 		Bools("bool", []bool{true, false}).
 		Ints("int", []int{1, 0}).
@@ -427,8 +653,10 @@ func TestFieldsArrayMultipleElement(t *testing.T) {
 		Floats64("float64", []float64{12, 0}).
 		Durs("dur", []time.Duration{1 * time.Second, 0}).
 		Times("time", []time.Time{{}, {}}).
+		IPAddrs("ip", []net.IP{{192, 168, 0, 100}, {0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34}}).
+		IPPrefixes("pfx", []net.IPNet{{IP: net.IP{192, 168, 0, 100}, Mask: net.CIDRMask(24, 32)}, {IP: net.IP{0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34}, Mask: net.CIDRMask(64, 128)}}).
 		Msg("")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"string":["foo","bar"],"stringer":[null,"127.0.0.1"],"err":["some error",null],"bool":[true,false],"int":[1,0],"int8":[2,0],"int16":[3,0],"int32":[4,0],"int64":[5,0],"uint":[6,0],"uint8":[7,0],"uint16":[8,0],"uint32":[9,0],"uint64":[10,0],"float32":[11,0],"float64":[12,0],"dur":[1000,0],"time":["0001-01-01T00:00:00Z","0001-01-01T00:00:00Z"]}`+"\n"; got != want {
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"objs":[{"Pub":"a","Tag":"z","priv":1},{"Pub":"b","Tag":"y","priv":2}],"objs_v":[{"Pub":"A","Tag":"Z","priv":3},{"Pub":"B","Tag":"Y","priv":4}],"strs":["foo","bar"],"strs_v":["baz","fizz"],"stringers":[null,"127.0.0.1"],"stringers_v":["255.255.255.255","::1"],"err":["some error",null],"bool":[true,false],"int":[1,0],"int8":[2,0],"int16":[3,0],"int32":[4,0],"int64":[5,0],"uint":[6,0],"uint8":[7,0],"uint16":[8,0],"uint32":[9,0],"uint64":[10,0],"float32":[11,0],"float64":[12,0],"dur":[1000,0],"time":["0001-01-01T00:00:00Z","0001-01-01T00:00:00Z"],"ip":["192.168.0.100","2001:db8:85a3::8a2e:370:7334"],"pfx":["192.168.0.100/24","2001:db8:85a3::8a2e:370:7334/64"]}`+"\n"; got != want {
 		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
 	}
 }
@@ -438,8 +666,14 @@ func TestFieldsDisabled(t *testing.T) {
 	log := New(out).Level(InfoLevel)
 	now := time.Now()
 	log.Debug().
+		Objects("obj", []LogObjectMarshaler{fixtureObj{"a", "z", 1}}).
+		ObjectsV("obj_v", fixtureObj{"A", "Z", 2}).
 		Str("string", "foo").
+		Strs("strs", []string{"foo"}).
+		StrsV("strs_v", "baz").
 		Stringer("stringer", net.IP{127, 0, 0, 1}).
+		Stringers("stringers", []fmt.Stringer{net.IP{127, 0, 0, 1}}).
+		StringersV("stringers_v", net.IPv6loopback).
 		Bytes("bytes", []byte("bar")).
 		Hex("hex", []byte{0x12, 0xef}).
 		AnErr("some_err", nil).
@@ -461,6 +695,13 @@ func TestFieldsDisabled(t *testing.T) {
 		Dur("dur", 1*time.Second).
 		Time("time", time.Time{}).
 		TimeDiff("diff", now, now.Add(-10*time.Second)).
+		IPAddr("ip", net.IP{127, 0, 0, 1}).
+		IPPrefix("ip", net.IPNet{IP: net.IP{127, 0, 0, 1}, Mask: net.CIDRMask(24, 32)}).
+		MACAddr("mac", net.HardwareAddr{0x00, 0x14, 0x22, 0x01, 0x23, 0x45}).
+		Ctx(context.Background()).
+		Any("any", struct{ A string }{"test"}).
+		Interface("interface", fixtureObj{"a", "z", 1}).
+		Err(errors.New("some error")).
 		Msg("")
 	if got, want := decodeIfBinaryToString(out.Bytes()), ""; got != want {
 		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
@@ -571,6 +812,28 @@ func TestSampling(t *testing.T) {
 	}
 }
 
+func TestDisableSampling(t *testing.T) {
+	// Save original state
+	original := samplingDisabled()
+	defer DisableSampling(original)
+
+	out := &bytes.Buffer{}
+	log := New(out).Sample(&BasicSampler{N: 2})
+
+	// Enable sampling disable
+	DisableSampling(true)
+
+	log.Log().Int("i", 1).Msg("")
+	log.Log().Int("i", 2).Msg("")
+	log.Log().Int("i", 3).Msg("")
+	log.Log().Int("i", 4).Msg("")
+
+	// All messages should be logged since sampling is disabled
+	if got, want := decodeIfBinaryToString(out.Bytes()), "{\"i\":1}\n{\"i\":2}\n{\"i\":3}\n{\"i\":4}\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
 func TestDiscard(t *testing.T) {
 	out := &bytes.Buffer{}
 	log := New(out)
@@ -606,6 +869,10 @@ func (lw *levelWriter) WriteLevel(lvl Level, p []byte) (int, error) {
 	return len(p), nil
 }
 
+func (lw *levelWriter) Close() error {
+	return nil
+}
+
 func TestLevelWriter(t *testing.T) {
 	lw := &levelWriter{
 		ops: []struct {
@@ -629,10 +896,15 @@ func TestLevelWriter(t *testing.T) {
 	log.WithLevel(InfoLevel).Msg("7")
 	log.WithLevel(WarnLevel).Msg("8")
 	log.WithLevel(ErrorLevel).Msg("9")
+	log.WithLevel(FatalLevel).Msg("10")
+	log.WithLevel(PanicLevel).Msg("11")
 	log.WithLevel(NoLevel).Msg("nolevel-2")
-	log.WithLevel(-1).Msg("-1") // Same as TraceLevel
-	log.WithLevel(-2).Msg("-2") // Will log
-	log.WithLevel(-3).Msg("-3") // Will not log
+	log.WithLevel(-1).Msg("-1")                  // Same as TraceLevel
+	log.WithLevel(-2).Msg("-2")                  // Will log
+	log.WithLevel(-3).Msg("-3")                  // Will not log
+	log.WithLevel(Disabled).Msg("Disabled")      // Will not log
+	log.Err(nil).Msg("e-1")                      // Will log at InfoLevel
+	log.Err(errors.New("some error")).Msg("e-2") // Will log at ErrorLevel
 
 	want := []struct {
 		l Level
@@ -649,12 +921,165 @@ func TestLevelWriter(t *testing.T) {
 		{InfoLevel, `{"level":"info","message":"7"}` + "\n"},
 		{WarnLevel, `{"level":"warn","message":"8"}` + "\n"},
 		{ErrorLevel, `{"level":"error","message":"9"}` + "\n"},
+		{FatalLevel, `{"level":"fatal","message":"10"}` + "\n"},
+		{PanicLevel, `{"level":"panic","message":"11"}` + "\n"},
 		{NoLevel, `{"message":"nolevel-2"}` + "\n"},
 		{Level(-1), `{"level":"trace","message":"-1"}` + "\n"},
 		{Level(-2), `{"level":"-2","message":"-2"}` + "\n"},
+		{InfoLevel, `{"level":"info","message":"e-1"}` + "\n"},
+		{ErrorLevel, `{"level":"error","error":"some error","message":"e-2"}` + "\n"},
 	}
 	if got := lw.ops; !reflect.DeepEqual(got, want) {
 		t.Errorf("invalid ops:\ngot:\n%v\nwant:\n%v", got, want)
+	}
+}
+
+func TestDisabledLevel(t *testing.T) {
+	lw := &levelWriter{
+		ops: []struct {
+			l Level
+			p string
+		}{},
+	}
+
+	// Allow extra-verbose logs.
+	SetGlobalLevel(TraceLevel - 1)
+	log := New(lw).Level(Disabled)
+	log.Error().Msg("0")                    // will not log
+	log.Log().Msg("nolevel-1")              // will not log
+	log.WithLevel(ErrorLevel).Msg("3")      // will not log
+	log.WithLevel(NoLevel).Msg("nolevel-2") // will not log
+	log.WithLevel(Disabled).Msg("Disabled") // will not log
+
+	want := []struct {
+		l Level
+		p string
+	}{}
+	if got := lw.ops; !reflect.DeepEqual(got, want) {
+		t.Errorf("invalid ops:\ngot:\n%v\nwant:\n%v", got, want)
+	}
+}
+
+func TestPanicLevel(t *testing.T) {
+	lw := &levelWriter{
+		ops: []struct {
+			l Level
+			p string
+		}{},
+	}
+
+	// Allow extra-verbose logs.
+	SetGlobalLevel(TraceLevel - 1)
+	log := New(lw).Level(TraceLevel - 1)
+
+	// Catch the panic from log.Panic().Msg("1")
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic from log.Panic()")
+		}
+	}()
+	log.Panic().Msg("1")
+	log.WithLevel(PanicLevel).Msg("2")
+
+	want := []struct {
+		l Level
+		p string
+	}{
+		{PanicLevel, `{"level":"panic","message":"1"}` + "\n"},
+		{PanicLevel, `{"level":"panic","message":"2"}` + "\n"},
+	}
+	if got := lw.ops; !reflect.DeepEqual(got, want) {
+		t.Errorf("invalid ops:\ngot:\n%v\nwant:\n%v", got, want)
+	}
+}
+
+func TestFatalLevel(t *testing.T) {
+	lw := &levelWriter{
+		ops: []struct {
+			l Level
+			p string
+		}{},
+	}
+
+	// Allow extra-verbose logs.
+	SetGlobalLevel(TraceLevel - 1)
+	log := New(lw).Level(TraceLevel - 1)
+
+	// Set FatalExitFunc to panic so we can catch it
+	oldFatalExitFunc := FatalExitFunc
+	FatalExitFunc = func() { panic("fatal exit") }
+	defer func() { FatalExitFunc = oldFatalExitFunc }()
+
+	// Catch the panic from log.Fatal().Msg("1")
+	defer func() {
+		if r := recover(); r == nil || r != "fatal exit" {
+			t.Errorf("expected panic 'fatal exit' from log.Fatal(), got %v", r)
+		}
+	}()
+	log.Fatal().Msg("1")
+	log.WithLevel(FatalLevel).Msg("2")
+
+	want := []struct {
+		l Level
+		p string
+	}{
+		{FatalLevel, `{"level":"fatal","message":"1"}` + "\n"},
+		{FatalLevel, `{"level":"fatal","message":"2"}` + "\n"},
+	}
+	if got := lw.ops; !reflect.DeepEqual(got, want) {
+		t.Errorf("invalid ops:\ngot:\n%v\nwant:\n%v", got, want)
+	}
+}
+
+func TestFatalDisabled(t *testing.T) {
+	out := &bytes.Buffer{}
+	log := New(out).Level(PanicLevel) // Disable FatalLevel
+
+	// Set FatalExitFunc to set a flag
+	var fatalCalled bool
+	oldFatalExitFunc := FatalExitFunc
+	FatalExitFunc = func() { fatalCalled = true }
+	defer func() { FatalExitFunc = oldFatalExitFunc }()
+
+	// Call Fatal, which should be disabled, call done, and return nil
+	e := log.Fatal()
+	if e != nil {
+		t.Error("Expected nil event when Fatal is disabled")
+	}
+	if !fatalCalled {
+		t.Error("Expected FatalExitFunc to be called when Fatal is disabled")
+	}
+	if out.Len() > 0 {
+		t.Errorf("Expected no output when Fatal is disabled, got: %s", out.String())
+	}
+}
+
+func TestPanicDisabled(t *testing.T) {
+	out := &bytes.Buffer{}
+	log := New(out).Level(Disabled) // Disable all levels
+
+	// Call Panic, which should be disabled, call done, and panic with ""
+	defer func() {
+		if r := recover(); r == nil || r != "" {
+			t.Errorf("Expected panic with empty string when Panic is disabled, got %v", r)
+		}
+	}()
+	e := log.Panic()
+	if e != nil {
+		t.Error("Expected nil event when Panic is disabled")
+	}
+	if out.Len() > 0 {
+		t.Errorf("Expected no output when Panic is disabled, got: %s", out.String())
+	}
+}
+
+func TestLoggerShouldWithNilWriter(t *testing.T) {
+	// Create a logger with nil writer to test the should method's nil check
+	log := Logger{w: nil, level: TraceLevel}
+
+	e := log.Info()
+	if e != nil {
+		t.Error("Expected nil event when writer is nil")
 	}
 }
 
@@ -718,60 +1143,13 @@ func TestOutputWithTimestamp(t *testing.T) {
 	}
 }
 
-type loggableError struct {
-	error
-}
-
-func (l loggableError) MarshalZerologObject(e *Event) {
-	e.Str("message", l.error.Error()+": loggableError")
-}
-
-func TestErrorMarshalFunc(t *testing.T) {
+func TestOutputWithContext(t *testing.T) {
+	ignoredOut := &bytes.Buffer{}
 	out := &bytes.Buffer{}
-	log := New(out)
+	log := New(ignoredOut).With().Str("foo", "bar").Logger().Output(out)
+	log.Log().Msg("hello world")
 
-	// test default behaviour
-	log.Log().Err(errors.New("err")).Msg("msg")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"error":"err","message":"msg"}`+"\n"; got != want {
-		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
-	}
-	out.Reset()
-
-	log.Log().Err(loggableError{errors.New("err")}).Msg("msg")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"error":{"message":"err: loggableError"},"message":"msg"}`+"\n"; got != want {
-		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
-	}
-	out.Reset()
-
-	// test overriding the ErrorMarshalFunc
-	originalErrorMarshalFunc := ErrorMarshalFunc
-	defer func() {
-		ErrorMarshalFunc = originalErrorMarshalFunc
-	}()
-
-	ErrorMarshalFunc = func(err error) interface{} {
-		return err.Error() + ": marshaled string"
-	}
-	log.Log().Err(errors.New("err")).Msg("msg")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"error":"err: marshaled string","message":"msg"}`+"\n"; got != want {
-		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
-	}
-
-	out.Reset()
-	ErrorMarshalFunc = func(err error) interface{} {
-		return errors.New(err.Error() + ": new error")
-	}
-	log.Log().Err(errors.New("err")).Msg("msg")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"error":"err: new error","message":"msg"}`+"\n"; got != want {
-		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
-	}
-
-	out.Reset()
-	ErrorMarshalFunc = func(err error) interface{} {
-		return loggableError{err}
-	}
-	log.Log().Err(errors.New("err")).Msg("msg")
-	if got, want := decodeIfBinaryToString(out.Bytes()), `{"error":{"message":"err: loggableError"},"message":"msg"}`+"\n"; got != want {
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"foo":"bar","message":"hello world"}`+"\n"; got != want {
 		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
 	}
 }
@@ -780,9 +1158,12 @@ func TestCallerMarshalFunc(t *testing.T) {
 	out := &bytes.Buffer{}
 	log := New(out)
 
+	var pc uintptr
+	var file string
+	var line int
 	// test default behaviour this is really brittle due to the line numbers
 	// actually mattering for validation
-	pc, file, line, _ := runtime.Caller(0)
+	pc, file, line, _ = runtime.Caller(0)
 	caller := fmt.Sprintf("%s:%d", file, line+2)
 	log.Log().Caller().Msg("msg")
 	if got, want := decodeIfBinaryToString(out.Bytes()), `{"caller":"`+caller+`","message":"msg"}`+"\n"; got != want {
@@ -879,6 +1260,55 @@ func TestUpdateEmptyContext(t *testing.T) {
 
 	if got := decodeIfBinaryToString(buf.Bytes()); got != want {
 		t.Errorf("invalid log output:\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
+func TestUpdateContextOnDisabledLogger(t *testing.T) {
+	var buf bytes.Buffer
+	log := disabledLogger
+
+	log.UpdateContext(func(c Context) Context {
+		return c.Str("foo", "bar")
+	})
+	log.Info().Msg("no panic")
+
+	want := ""
+
+	if got := decodeIfBinaryToString(buf.Bytes()); got != want {
+		t.Errorf("invalid log output:\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
+func TestUpdateContextOnNopLogger(t *testing.T) {
+	// Nop() creates a new disabled logger that is a different pointer than
+	// the package-level disabledLogger. UpdateContext should still treat it
+	// as disabled and skip the update function. See issue #643.
+	log := Nop()
+
+	called := false
+	log.UpdateContext(func(c Context) Context {
+		called = true
+		return c.Str("foo", "bar")
+	})
+
+	if called {
+		t.Error("UpdateContext should not call update func on a Nop logger")
+	}
+}
+
+func TestUpdateContextOnZeroValueLogger(t *testing.T) {
+	// A zero-value Logger has a nil writer and should be treated as
+	// disabled by UpdateContext. See issue #643.
+	var log Logger
+
+	called := false
+	log.UpdateContext(func(c Context) Context {
+		called = true
+		return c.Str("foo", "bar")
+	})
+
+	if called {
+		t.Error("UpdateContext should not call update func on a zero-value logger")
 	}
 }
 
@@ -1006,5 +1436,79 @@ func TestUnmarshalTextLevel(t *testing.T) {
 				t.Errorf("UnmarshalText() got = %v, want %v", l, tt.want)
 			}
 		})
+	}
+}
+
+func TestUnmarshalTextLevelNil(t *testing.T) {
+	var l *Level
+	err := l.UnmarshalText([]byte("info"))
+	if err == nil || err.Error() != "can't unmarshal a nil *Level" {
+		t.Errorf("UnmarshalText() on nil *Level error = %v, want 'can't unmarshal a nil *Level'", err)
+	}
+}
+
+func TestHTMLNoEscaping(t *testing.T) {
+	out := &bytes.Buffer{}
+	log := New(out)
+	log.Log().Interface("head", "<test>").Send()
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"head":"<test>"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestParseLevelWarningAlias(t *testing.T) {
+	l, err := ParseLevel("warning")
+	if err != nil || l != WarnLevel {
+		t.Fatalf("ParseLevel(warning)=%v %v", l, err)
+	}
+	l, err = ParseLevel("WARNING")
+	if err != nil || l != WarnLevel {
+		t.Fatalf("ParseLevel(WARNING)=%v %v", l, err)
+	}
+}
+
+func TestParseLevelOutOfBounds(t *testing.T) {
+	l, err := ParseLevel("128")
+	if err == nil || l != NoLevel {
+		t.Fatalf("expected error for 128, got %v (%v)", l, err)
+	}
+	l, err = ParseLevel("-129")
+	if err == nil || l != NoLevel {
+		t.Fatalf("expected error for -129, got %v (%v)", l, err)
+	}
+}
+
+// outputCtxProbeKey is the context key used by TestOutputPreservesGoContext.
+type outputCtxProbeKey struct{}
+
+// outputCtxProbeHook records the trace value it can read from the event's Go
+// context, so tests can assert whether Logger.Output preserved it.
+type outputCtxProbeHook struct {
+	saw string
+}
+
+func (h *outputCtxProbeHook) Run(e *Event, _ Level, _ string) {
+	if v, ok := e.GetCtx().Value(outputCtxProbeKey{}).(string); ok {
+		h.saw = v
+		return
+	}
+	h.saw = ""
+}
+
+// Logger.Output duplicates every other piece of logger state (level, sampler,
+// stack, hooks and the context buffer), so it must also carry over the Go
+// context.Context. Hooks and Func callbacks read it via Event.GetCtx.
+func TestOutputPreservesGoContext(t *testing.T) {
+	probe := &outputCtxProbeHook{}
+	log := New(&bytes.Buffer{}).Hook(probe).
+		With().Ctx(context.WithValue(context.Background(), outputCtxProbeKey{}, "abc-123")).Logger()
+
+	out := &bytes.Buffer{}
+	got := log.Output(out)
+	probe.saw = ""
+	got.Info().Msg("hello world")
+
+	if probe.saw != "abc-123" {
+		t.Errorf("Logger.Output() dropped the Go context: hook saw %q, want %q", probe.saw, "abc-123")
 	}
 }

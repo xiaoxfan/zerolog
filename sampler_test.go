@@ -1,3 +1,4 @@
+//go:build !binary_log
 // +build !binary_log
 
 package zerolog
@@ -29,6 +30,13 @@ var samplers = []struct {
 		100, 20, 20,
 	},
 	{
+		"BasicSampler_0",
+		func() Sampler {
+			return &BasicSampler{N: 0}
+		},
+		100, 0, 0,
+	},
+	{
 		"RandomSampler",
 		func() Sampler {
 			return RandomSampler(5)
@@ -36,11 +44,25 @@ var samplers = []struct {
 		100, 10, 30,
 	},
 	{
+		"RandomSampler_0",
+		func() Sampler {
+			return RandomSampler(0)
+		},
+		100, 0, 0,
+	},
+	{
 		"BurstSampler",
 		func() Sampler {
 			return &BurstSampler{Burst: 20, Period: time.Second}
 		},
 		100, 20, 20,
+	},
+	{
+		"BurstSampler_0",
+		func() Sampler {
+			return &BurstSampler{Burst: 0, Period: time.Second}
+		},
+		100, 0, 0,
 	},
 	{
 		"BurstSamplerNext",
@@ -79,6 +101,107 @@ func BenchmarkSamplers(b *testing.B) {
 					sampler.Sample(0)
 				}
 			})
+		})
+	}
+}
+
+func TestBurst(t *testing.T) {
+	sampler := &BurstSampler{Burst: 1, Period: time.Second}
+
+	t0 := time.Now()
+	now := t0
+	mockedTime := func() time.Time {
+		return now
+	}
+
+	TimestampFunc = mockedTime
+	defer func() { TimestampFunc = time.Now }()
+
+	scenario := []struct {
+		tm   time.Time
+		want bool
+	}{
+		{t0, true},
+		{t0.Add(time.Second - time.Nanosecond), false},
+		{t0.Add(time.Second), true},
+		{t0.Add(time.Second + time.Nanosecond), false},
+	}
+
+	for i, step := range scenario {
+		now = step.tm
+		got := sampler.Sample(NoLevel)
+		if got != step.want {
+			t.Errorf("step %d (t=%s): expect %t got %t", i, step.tm, step.want, got)
+		}
+	}
+}
+
+func TestLevelSampler(t *testing.T) {
+	// Create mock samplers that return true for specific levels
+	traceSampler := &BasicSampler{N: 1} // Always sample
+	debugSampler := &BasicSampler{N: 0} // Never sample
+	infoSampler := &BasicSampler{N: 1}  // Always sample
+	warnSampler := &BasicSampler{N: 0}  // Never sample
+	errorSampler := &BasicSampler{N: 1} // Always sample
+
+	sampler := LevelSampler{
+		TraceSampler: traceSampler,
+		DebugSampler: debugSampler,
+		InfoSampler:  infoSampler,
+		WarnSampler:  warnSampler,
+		ErrorSampler: errorSampler,
+	}
+
+	// Test each level
+	if !sampler.Sample(TraceLevel) {
+		t.Error("TraceLevel should be sampled")
+	}
+	if sampler.Sample(DebugLevel) {
+		t.Error("DebugLevel should not be sampled")
+	}
+	if !sampler.Sample(InfoLevel) {
+		t.Error("InfoLevel should be sampled")
+	}
+	if sampler.Sample(WarnLevel) {
+		t.Error("WarnLevel should not be sampled")
+	}
+	if !sampler.Sample(ErrorLevel) {
+		t.Error("ErrorLevel should be sampled")
+	}
+
+	// Test levels not covered by the LevelSampler sampler (FatalLevel, PanicLevel, NoLevel) - should return true
+	if !sampler.Sample(FatalLevel) {
+		t.Error("FatalLevel should return true when no sampler is set")
+	}
+	if !sampler.Sample(PanicLevel) {
+		t.Error("PanicLevel should return true when no sampler is set")
+	}
+	if !sampler.Sample(NoLevel) {
+		t.Error("NoLevel should return true when no sampler is set")
+	}
+}
+
+func TestRandomSamplerUint32Rates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rate RandomSampler
+	}{
+		{"zero", 0},
+		{"one", 1},
+		{"max_int32", 1<<31 - 1},
+		{"above_max_int32", 1 << 31},
+		{"max_uint32", 1<<32 - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for i := 0; i < 100; i++ {
+				got := tc.rate.Sample(InfoLevel)
+				if tc.rate == 0 && got {
+					t.Fatal("zero sampling rate must reject every event")
+				}
+				if tc.rate == 1 && !got {
+					t.Fatal("sampling rate of one must accept every event")
+				}
+			}
 		})
 	}
 }

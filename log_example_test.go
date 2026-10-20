@@ -72,7 +72,7 @@ func ExampleLogger_Hook() {
 	var levelNameHook LevelNameHook
 	var messageHook MessageHook = "The message"
 
-	log := zerolog.New(os.Stdout).Hook(levelNameHook).Hook(messageHook)
+	log := zerolog.New(os.Stdout).Hook(levelNameHook, messageHook)
 
 	log.Info().Msg("hello world")
 
@@ -93,6 +93,14 @@ func ExampleLogger_Printf() {
 	log.Printf("hello %s", "world")
 
 	// Output: {"level":"debug","message":"hello world"}
+}
+
+func ExampleLogger_Println() {
+	log := zerolog.New(os.Stdout)
+
+	log.Println("hello world")
+
+	// Output: {"level":"debug","message":"hello world\n"}
 }
 
 func ExampleLogger_Trace() {
@@ -184,12 +192,13 @@ func ExampleLogger_Log() {
 func ExampleEvent_Dict() {
 	log := zerolog.New(os.Stdout)
 
-	log.Log().
-		Str("foo", "bar").
-		Dict("dict", zerolog.Dict().
-			Str("bar", "baz").
-			Int("n", 1),
-		).
+	e := log.Log().
+		Str("foo", "bar")
+
+	e.Dict("dict", e.CreateDict().
+		Str("bar", "baz").
+		Int("n", 1),
+	).
 		Msg("hello world")
 
 	// Output: {"foo":"bar","dict":{"bar":"baz","n":1},"message":"hello world"}
@@ -234,16 +243,17 @@ func (uu Users) MarshalZerologArray(a *zerolog.Array) {
 func ExampleEvent_Array() {
 	log := zerolog.New(os.Stdout)
 
-	log.Log().
-		Str("foo", "bar").
-		Array("array", zerolog.Arr().
-			Str("baz").
-			Int(1).
-			Dict(zerolog.Dict().
-				Str("bar", "baz").
-				Int("n", 1),
-			),
-		).
+	e := log.Log().
+		Str("foo", "bar")
+
+	e.Array("array", e.CreateArray().
+		Str("baz").
+		Int(1).
+		Dict(e.CreateDict().
+			Str("bar", "baz").
+			Int("n", 1),
+		),
+	).
 		Msg("hello world")
 
 	// Output: {"foo":"bar","array":["baz",1,{"bar":"baz","n":1}],"message":"hello world"}
@@ -278,6 +288,34 @@ func ExampleEvent_Object() {
 		Msg("hello world")
 
 	// Output: {"foo":"bar","user":{"name":"John","age":35,"created":"0001-01-01T00:00:00Z"},"message":"hello world"}
+}
+
+func ExampleEvent_Objects() {
+	log := zerolog.New(os.Stdout)
+
+	// User implements zerolog.LogObjectMarshaler
+	u := User{"John", 35, time.Time{}}
+	u2 := User{"Bono", 54, time.Time{}}
+	users := []User{u, u2}
+
+	log.Log().
+		Objects("users", zerolog.AsLogObjectMarshalers(users)).
+		Msg("hello world")
+	// Output: {"users":[{"name":"John","age":35,"created":"0001-01-01T00:00:00Z"},{"name":"Bono","age":54,"created":"0001-01-01T00:00:00Z"}],"message":"hello world"}
+}
+
+func ExampleEvent_ObjectsV() {
+	log := zerolog.New(os.Stdout)
+
+	// User implements zerolog.LogObjectMarshaler
+	u := User{"John", 35, time.Time{}}
+	u2 := User{"Bono", 54, time.Time{}}
+
+	log.Log().
+		ObjectsV("users", u, u2).
+		Msg("hello world")
+
+	// Output:  {"users":[{"name":"John","age":35,"created":"0001-01-01T00:00:00Z"},{"name":"Bono","age":54,"created":"0001-01-01T00:00:00Z"}],"message":"hello world"}
 }
 
 func ExampleEvent_EmbedObject() {
@@ -372,27 +410,29 @@ func ExampleEvent_Fields_slice() {
 }
 
 func ExampleContext_Dict() {
-	log := zerolog.New(os.Stdout).With().
-		Str("foo", "bar").
-		Dict("dict", zerolog.Dict().
-			Str("bar", "baz").
-			Int("n", 1),
-		).Logger()
+	ctx := zerolog.New(os.Stdout).With().
+		Str("foo", "bar")
 
-	log.Log().Msg("hello world")
+	logger := ctx.Dict("dict", ctx.CreateDict().
+		Str("bar", "baz").
+		Int("n", 1),
+	).Logger()
+
+	logger.Log().Msg("hello world")
 
 	// Output: {"foo":"bar","dict":{"bar":"baz","n":1},"message":"hello world"}
 }
 
 func ExampleContext_Array() {
-	log := zerolog.New(os.Stdout).With().
-		Str("foo", "bar").
-		Array("array", zerolog.Arr().
-			Str("baz").
-			Int(1),
-		).Logger()
+	ctx := zerolog.New(os.Stdout).With().
+		Str("foo", "bar")
 
-	log.Log().Msg("hello world")
+	logger := ctx.Array("array", ctx.CreateArray().
+		Str("baz").
+		Int(1),
+	).Logger()
+
+	logger.Log().Msg("hello world")
 
 	// Output: {"foo":"bar","array":["baz",1],"message":"hello world"}
 }
@@ -427,9 +467,37 @@ func ExampleContext_Object() {
 
 	// Output: {"foo":"bar","user":{"name":"John","age":35,"created":"0001-01-01T00:00:00Z"},"message":"hello world"}
 }
+func ExampleContext_Objects() {
+	// User implements zerolog.LogObjectMarshaler
+	u := User{"John", 35, time.Time{}}
+	u2 := User{"Bono", 54, time.Time{}}
+
+	log := zerolog.New(os.Stdout).With().
+		Str("foo", "bar").
+		Objects("users", []zerolog.LogObjectMarshaler{u, u2}).
+		Logger()
+
+	log.Log().Msg("hello world")
+
+	// Output: {"foo":"bar","users":[{"name":"John","age":35,"created":"0001-01-01T00:00:00Z"},{"name":"Bono","age":54,"created":"0001-01-01T00:00:00Z"}],"message":"hello world"}
+}
+
+func ExampleContext_ObjectsV() {
+	// User implements zerolog.LogObjectMarshaler
+	u := User{"John", 35, time.Time{}}
+	u2 := User{"Bono", 54, time.Time{}}
+
+	log := zerolog.New(os.Stdout).With().
+		Str("foo", "bar").
+		ObjectsV("users", u, u2). // shows variadic version with distinct element arguments
+		Logger()
+
+	log.Log().Msg("hello world")
+
+	// Output: {"foo":"bar","users":[{"name":"John","age":35,"created":"0001-01-01T00:00:00Z"},{"name":"Bono","age":54,"created":"0001-01-01T00:00:00Z"}],"message":"hello world"}
+}
 
 func ExampleContext_EmbedObject() {
-
 	price := Price{val: 6449, prec: 2, unit: "$"}
 
 	log := zerolog.New(os.Stdout).With().
@@ -438,7 +506,6 @@ func ExampleContext_EmbedObject() {
 		Logger()
 
 	log.Log().Msg("hello world")
-
 	// Output: {"foo":"bar","price":"$64.49","message":"hello world"}
 }
 
@@ -499,6 +566,17 @@ func ExampleContext_IPAddr() {
 	// Output: {"HostIP":"192.168.0.100","message":"hello world"}
 }
 
+func ExampleContext_IPAddrs() {
+	hostIP := net.IP{192, 168, 0, 100}
+	log := zerolog.New(os.Stdout).With().
+		IPAddrs("HostIP", []net.IP{hostIP}).
+		Logger()
+
+	log.Log().Msg("hello world")
+
+	// Output: {"HostIP":["192.168.0.100"],"message":"hello world"}
+}
+
 func ExampleContext_IPPrefix() {
 	route := net.IPNet{IP: net.IP{192, 168, 0, 0}, Mask: net.CIDRMask(24, 32)}
 	log := zerolog.New(os.Stdout).With().
@@ -508,6 +586,17 @@ func ExampleContext_IPPrefix() {
 	log.Log().Msg("hello world")
 
 	// Output: {"Route":"192.168.0.0/24","message":"hello world"}
+}
+
+func ExampleContext_IPPrefixes() {
+	route := net.IPNet{IP: net.IP{192, 168, 0, 0}, Mask: net.CIDRMask(24, 32)}
+	log := zerolog.New(os.Stdout).With().
+		IPPrefixes("Route", []net.IPNet{route}).
+		Logger()
+
+	log.Log().Msg("hello world")
+
+	// Output: {"Route":["192.168.0.0/24"],"message":"hello world"}
 }
 
 func ExampleContext_MACAddr() {
@@ -551,4 +640,47 @@ func ExampleContext_Fields_slice() {
 	log.Log().Msg("hello world")
 
 	// Output: {"foo":"bar","bar":"baz","n":1,"message":"hello world"}
+}
+
+func ExampleContext_Times() {
+	t1 := time.Time{}
+	t2 := t1.Add(time.Second * 10)
+	t := []time.Time{t1, t2}
+
+	log := zerolog.New(os.Stdout).With().
+		Str("foo", "bar").
+		Times("times", t).
+		Logger()
+
+	log.Log().Msg("hello world")
+
+	// Output: {"foo":"bar","times":["0001-01-01T00:00:00Z","0001-01-01T00:00:10Z"],"message":"hello world"}
+}
+
+func ExampleEvent_Stringers() {
+	log := zerolog.New(os.Stdout)
+
+	// net.IP values implement fmt.Stringer and can be used with StringersV
+	a := net.IP{127, 0, 0, 1}
+	b := net.IP{127, 0, 0, 2}
+	ips := []net.IP{a, b}
+
+	log.Log().
+		Stringers("ips", zerolog.AsStringers(ips)).
+		Msg("hello world")
+	// Output: {"ips":["127.0.0.1","127.0.0.2"],"message":"hello world"}
+}
+
+func ExampleContext_StringersV() {
+	// net.IP values implement fmt.Stringer and can be used with StringersV
+	a := net.IPv4bcast
+	b := net.IPv4allrouter
+
+	log := zerolog.New(os.Stdout).With().
+		StringersV("ips", a, b).
+		Logger()
+
+	log.Log().Msg("hello world")
+
+	// Output: {"ips":["255.255.255.255","224.0.0.2"],"message":"hello world"}
 }
